@@ -1,0 +1,28 @@
+clc; 
+clear;
+
+Rand_seed=189;
+C_range=logspace(-4, 4,10);
+gamma_range=logspace(-4, 4,10);
+
+X_WPEEEG_zscore = importdata('H:\WPEandEEG_predict\Code\X_WPEEEG_zscore.mat'); 
+Y_PANSS_T = importdata('H:\WPEandEEG_predict\Code\Y_PANSS_T.mat');
+feature_names_WPEEEG = importdata('H:\sz_preprocessed\fMRI\pre_treatment\feature_names_AALEEG_NEW.mat');
+save_path='H:\WPEandEEG_predict\result\WPEEEG';
+res_WPEEEG = run_nested_svr_v2(X_WPEEEG_zscore, Y_PANSS_T, feature_names_WPEEEG, ...
+    Rand_seed,C_range,gamma_range,save_path,'doplot',true);
+
+%
+X_WPE_zscore = importdata('H:\WPEandEEG_predict\Code\X_WPE_zscore.mat'); 
+save('H:\WPEandEEG_predict\Code\Y_PANSS_T.mat','Y_PANSS_T');
+feature_names_WPE = importdata('H:\sz_preprocessed\fMRI\pre_treatment\feature_names_AAL.mat');
+save_path='H:\WPEandEEG_predict\result\WPE';
+res_WPE = run_nested_svr_v2(X_WPE_zscore, Y_PANSS_T, feature_names_WPE, ...
+    Rand_seed,C_range,gamma_range,save_path,'doplot',true);
+
+%
+X_EEG_zscore = importdata('H:\WPEandEEG_predict\Code\X_EEG_zscore.mat'); 
+feature_names_EEG = importdata('H:\sz_preprocessed\fMRI\pre_treatment\feature_names_EEG_NEW.mat');
+save_path='H:\WPEandEEG_predict\result\EEG';
+res_EEG = run_nested_svr_v2(X_EEG_zscore, Y_PANSS_T, feature_names_EEG, ...
+    Rand_seed,C_range,gamma_range,save_path,'doplot',true);

@@ -1,0 +1,229 @@
+clc; clear;
+
+%% === 检查依赖函数 brewermap ===
+if ~exist('brewermap', 'file')
+    error('请安装 brewermap 函数（File Exchange 或 Add-On Explorer 中搜索）。');
+end
+
+%% === 输入路径和保存路径 ===
+% EEG: 78 × 15，WPE: 78 × 90，Y: 78 × 1
+X_EEG = importdata('H:\WPEandEEG_predict\Code\data\X_EEG_zscore.mat');
+X_WPE = importdata('H:\WPEandEEG_predict\Code\data\X_WPE_zscore.mat.mat');
+Y = importdata('H:\WPEandEEG_predict\Code\data\panss_g_reducation.mat');
+
+EEG_names = importdata('H:\sz_preprocessed\fMRI\pre_treatment\feature_names_EEG_NEW.mat');
+WPE_names = importdata('H:\sz_preprocessed\fMRI\pre_treatment\feature_names_AAL.mat');
+
+% 保存路径
+save_dir = 'H:\sz_preprocessed\fMRI\result\picture\PLSNEW\PANSS-G\';
+if ~exist(save_dir, 'dir')
+    mkdir(save_dir);
+end
+
+%% === 数据标准化 + 拼接 ===
+% X_EEG = zscore(X_EEG);
+% X_WPE = zscore(X_WPE);
+%Y = zscore(Y);
+
+X_all = [X_EEG, X_WPE];  % 78 × 105
+feature_names = [EEG_names, WPE_names];
+feature_names = feature_names(:);
+
+%% === PLS 建模 ===
+nComponents = 10;
+[XL, YL, XS, YS, BETA, PCTVAR, MSE, stats] = plsregress(X_all, Y, nComponents);
+
+%% === 提取最优成分信息 ===
+[~, best_component_idx] = max(PCTVAR(2,:));
+best_XS = XS(:, best_component_idx);
+best_weights = stats.W(:, best_component_idx);
+
+%% 解释方差做permutation test
+rng(1);
+nPerm = 10000;
+
+% 构建 null 分布
+null_pctvar = zeros(nPerm,1);
+
+
+for i = 1:nPerm
+    Y_perm = Y(randperm(length(Y)));  % 打乱Y
+    [~, ~, ~, ~, ~, PCTVAR_perm] = plsregress(X_all, Y_perm, nComponents);
+    null_pctvar(i) = max(PCTVAR_perm(2,:));  % 记录Y的解释方差 
+end
+
+% 计算 p 值（双尾）
+p_expalvariance = mean(null_pctvar >= best_component_idx);
+
+%% === Bootstrap 重采样 ===
+nBootstrap = 1000;
+rng(1);  % 固定随机种子
+[nSample, nFeature] = size(X_all);
+boot_weights = zeros(nFeature, nBootstrap);
+
+fprintf('Running %d bootstrap iterations...\n', nBootstrap);
+
+for i = 1:nBootstrap
+    idx = ceil(rand(length(Y),1) * length(Y));  % 有放回抽样
+    X_boot = X_all(idx, :);
+    Y_boot = Y(idx);
+    
+    try
+        [~, ~, ~, ~, ~, ~, ~, stats_boot] = plsregress(X_boot, Y_boot, nComponents);
+        boot_weights(:, i) = stats_boot.W(:, best_component_idx);  % 只保留第1主成分的特征权重
+    catch
+        warning('第 %d 次bootstrap失败，跳过。', i);
+        boot_weights(:, i) = NaN;
+    end
+end
+
+% 去除失败的采样
+valid_boot_idx = all(~isnan(boot_weights), 1);
+boot_weights = boot_weights(:, valid_boot_idx);
+
+mean_weights = mean(boot_weights, 2);
+std_weights = std(boot_weights, 0, 2);
+boot_z = mean_weights ./ std_weights;
+
+% 取z-score最大的前20个特征
+%% === 图2-bootstrap版：Bootstrap z-score 权重图（前20名，正负分开） ===
+
+% 计算z值的绝对值排序，取前20名
+[~, sorted_idx_abs] = sort(abs(boot_z), 'descend');
+top_idx_20 = sorted_idx_abs(1:20);
+
+% 拆分为正负
+top_z_20 = boot_z(top_idx_20);
+top_names_20 = feature_names(top_idx_20);
+
+pos_mask = top_z_20 > 0;
+neg_mask = top_z_20 < 0;
+
+% 保持负的在上、正的在下的顺序
+neg_idx = find(neg_mask);
+neg_idx =flip (neg_idx);
+pos_idx = find(pos_mask);
+
+% 重新组合索引
+top_idx_final = [neg_idx; pos_idx];
+top_weights_final = top_z_20(top_idx_final);
+top_names_final = top_names_20(top_idx_final);
+
+% 设置颜色渐变
+n_neg = sum(neg_mask);
+n_pos = sum(pos_mask);
+cmap_neg = brewermap(n_neg, 'GnBu');
+cmap_pos = flipud(brewermap(n_pos, 'YlOrRd'));
+bar_colors_final = [cmap_neg; cmap_pos];
+
+% 绘图
+fig2_boot_v2 = figure('Color', 'w', 'Position', [100, 100, 400, 600]);
+b = barh(1:length(top_weights_final), top_weights_final, ...
+    'FaceColor', 'flat', 'EdgeColor', 'k', 'LineWidth', 0.5);
+b.CData = bar_colors_final;
+
+set(gca, 'YTick', 1:length(top_weights_final), ...
+         'YTickLabel', top_names_final, ...
+         'YDir', 'reverse', ...
+         'FontName', 'Arial', 'FontWeight', 'bold', 'FontSize', 10, ...
+         'LineWidth', 0.8, 'TickLabelInterpreter', 'none');
+xlabel('Bootstrap Weight Z-score', 'FontName', 'Arial', 'FontWeight', 'bold', 'FontSize', 11);
+ylabel('Feature Name', 'FontName', 'Arial', 'FontWeight', 'bold', 'FontSize', 11);
+title('Top 20 Features by Bootstrap Z-score', 'FontName', 'Arial', 'FontWeight', 'bold');
+box on; grid off;
+
+
+
+
+
+%% === 图1：PLS成分解释变异 ===
+fig1 = figure('Color', 'w', 'Position', [100, 100, 400, 300]);
+bar(PCTVAR(2,:)*100, 'FaceColor', [0 0.36 0.62]);
+xlabel('PLS Component','FontSize', 11);
+ylabel('Variance Explained(%)','FontSize', 11);
+title('Variance Explained in Y by PLS Components');
+grid off;
+set(gca, 'FontName', 'Arial', 'FontWeight', 'bold', ...
+    'TickLabelInterpreter', 'none', 'LineWidth', 0.8, 'FontSize', 10);
+%% === 图2：权重前15（正负各15） ===
+% weights_z = zscore(best_weights);
+% modalities = [repmat({'EEG'}, 15, 1); repmat({'WPE'}, 90, 1)];
+% 
+% [~, pos_idx_sorted] = sort(best_weights, 'descend');
+% [~, neg_idx_sorted] = sort(best_weights, 'ascend');
+% top_idx = [flipud(neg_idx_sorted(1:15)); pos_idx_sorted(1:15)];
+% 
+% top_weights = weights_z(top_idx);
+% top_names = feature_names(top_idx);
+% 
+% cmap_pos = flipud(brewermap(15, 'YlOrRd'));
+% cmap_neg = brewermap(15, 'GnBu');
+% bar_colors = [cmap_neg; cmap_pos];
+% 
+% fig2 = figure('Color', 'w', 'Position', [100, 100, 450, 700]);
+% b = barh(1:30, top_weights, 'FaceColor', 'flat', 'EdgeColor', 'k', 'LineWidth', 0.5);
+% b.CData = bar_colors;
+% set(gca, 'YTick', 1:30, 'YTickLabel', top_names, 'YDir', 'reverse', ...
+%     'FontName', 'Arial', 'FontWeight', 'bold', 'FontSize', 10, 'LineWidth', 0.8, ...
+%     'TickLabelInterpreter', 'none');
+% xlabel('PLS1 Weight (z-score)', 'FontName', 'Arial', 'FontWeight', 'bold','FontSize', 11);
+% ylabel('Feature Name', 'FontName', 'Arial', 'FontWeight', 'bold','FontSize', 11);
+% title('Top 15 Positive and Negative Features (Z-scored)', 'FontName', 'Arial', 'FontWeight', 'bold');
+% box on; grid off;
+%% === 图3：散点图 + 回归线 + CI ===
+nPerm = 10000;
+rng(1);  % 固定随机种子
+observed_r = corr(best_XS, Y);
+null_r = zeros(nPerm,1);
+for i = 1:nPerm
+    Y_perm = Y(randperm(length(Y)));
+    null_r(i) = corr(best_XS, Y_perm);
+end
+p_value = mean(abs(null_r) >= abs(observed_r));
+
+% 拟合线性模型
+mdl = fitlm(best_XS, Y);
+
+% 拟合点和置信区间
+xq = linspace(min(best_XS), max(best_XS), 100)';
+[yhat, yCI] = predict(mdl, xq);
+
+% 绘制散点图
+fig3 = figure('Color', 'w', 'Position', [100, 100, 400, 350]);
+scatter(best_XS, Y, 60, 'filled', 'MarkerFaceColor', [0 0.36 0.62]); hold on;
+% 绘制回归线
+plot(xq, yhat, 'k-', 'LineWidth', 2);
+% 绘制置信区间阴影带
+fill([xq; flipud(xq)], [yCI(:,1); flipud(yCI(:,2))], ...
+     [0.45 0.45 0.45], 'EdgeColor', 'none', 'FaceAlpha', 0.5);
+
+xlabel(sprintf('PLS Component %d Score', best_component_idx), 'FontName', 'Arial', 'FontWeight', 'bold','FontSize', 11);
+ylabel('PANSS Reduction', 'FontName', 'Arial', 'FontWeight', 'bold','FontSize', 11);
+title(sprintf('r = %.2f, p = %.4f', observed_r, p_value), 'FontName', 'Arial', 'FontWeight', 'bold');
+set(gca, 'FontName', 'Arial', 'FontWeight', 'bold', 'LineWidth', 0.8,'FontSize', 9);
+box on; grid off;
+
+%% === 图4：Permutation Null 分布 ===
+fig4 = figure('Color', 'w', 'Position', [100, 100, 150, 120]);
+histogram(null_r, 'Normalization','probability','FaceColor',[0.7 0.7 0.7]);
+xline(observed_r, 'r--', 'LineWidth', 2);
+xlabel('Permutation r', 'FontName', 'Arial', 'FontWeight', 'bold');
+ylabel('Probability', 'FontName', 'Arial', 'FontWeight', 'bold');
+title(sprintf('Null Distribution (Component %d)', best_component_idx), 'FontName', 'Arial', 'FontWeight', 'bold');
+set(gca, 'FontName', 'Arial', 'FontWeight', 'bold', 'LineWidth', 0.8);
+box on; grid off;
+
+%% === 表格输出：Top20特征 ===
+% [~, sorted_idx] = sort(abs(stats.W(:,1)), 'descend');
+% topN = 20;
+% TopFeatureTable = table(feature_names(sorted_idx(1:topN)), stats.W(sorted_idx(1:topN),1), ...
+%     'VariableNames', {'FeatureName','Component1_Weight'});
+% disp('Top 20 contributing features in Component 1:');
+% disp(TopFeatureTable);
+
+%% === 图保存 ===
+print(fig1, fullfile(save_dir, 'PLS1_variance.pdf'), '-dpdf', '-painters');
+% 保存图像
+print(fig2_boot_v2, fullfile(save_dir, 'Bootstrap_Top20_PLS_weights.pdf'), '-dpdf', '-painters');
+print(fig3, fullfile(save_dir, 'PLS1_scatter.pdf'), '-dpdf', '-painters');
+print(fig4, fullfile(save_dir, 'PLS1_permutation.pdf'), '-dpdf', '-painters');
