@@ -3,7 +3,7 @@ clear;
 
 
 % Set random seed for reproducibility
-Rand_seed = 189; %
+Rand_seed = 189; %random seed;
 
 % Define parameter search ranges for SVR (Support Vector Regression)
 C_range = logspace(-4, 4, 10);       % C values: 10 values from 10^-4 to 10^4(PANSS-T and PANSS-G),7 values from 10^-3 to 10^3(PANSS-N)
