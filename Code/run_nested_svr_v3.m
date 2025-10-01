@@ -1,4 +1,4 @@
-function results = run_nested_svr_v2(X, Y, feature_names, Random_seed, C_range, gamma_range, save_path, varargin)
+function results = run_nested_svr_v2(X, Y, feature_names, covariates, Random_seed, C_range, gamma_range, save_path, varargin)
 % Function: Nested cross-validation + SVR + optional permutation test + plotting
 % Inputs:
 %   - X: feature matrix (nSamples x nFeatures)
@@ -34,52 +34,52 @@ end
 [nSamples, nFeatures] = size(X);
 feature_names = feature_names(:);  % Ensure column format
 %% === Step 1: Covariate Regression (Auto-detect single/dual modality) ===
-% covariates = zscore(covariates);  % Z-score normalize covariates
-% X_cov = [ones(size(covariates,1),1), covariates];  % Add intercept term to design matrix
-% 
-% % Automatically detect dual modality based on feature count
-% is_dual_modality = false;
-% if size(X,2) == 105  % Assuming first 90 are WPE, last 15 are EEG
-%     X_WPE = X(:,1:90);
-%     X_EEG = X(:,91:end);
-%     is_dual_modality = true;
-% elseif size(X,2) == 90  % Only WPE features
-%     X_WPE = X;
-%     X_EEG = [];
-% elseif size(X,2) == 15  % Only EEG features
-%     X_WPE = [];
-%     X_EEG = X;
-% else
-%     % Unknown structure – apply covariate regression to the whole matrix
-%     warning('Unknown feature dimension structure, performing global covariate regression.');
-%     for i = 1:size(X,2)
-%         b = X_cov \ X(:,i);  % Regress out covariates
-%         X(:,i) = X(:,i) - X_cov * b;
-%     end
-%     X = zscore(X);  % Normalize after regression
-% end
-% 
-% % Perform separate covariate regression for each modality if present
-% if is_dual_modality || ~isempty(X_WPE) || ~isempty(X_EEG)
-%     if ~isempty(X_WPE)
-%         for i = 1:size(X_WPE,2)
-%             b = X_cov \ X_WPE(:,i);
-%             X_WPE(:,i) = X_WPE(:,i) - X_cov * b;
-%         end
-%         X_WPE = zscore(X_WPE);
-%     end
-% 
-%     if ~isempty(X_EEG)
-%         for i = 1:size(X_EEG,2)
-%             b = X_cov \ X_EEG(:,i);
-%             X_EEG(:,i) = X_EEG(:,i) - X_cov * b;
-%         end
-%         X_EEG = zscore(X_EEG);
-%     end
-% 
-%     % Concatenate the two modalities after preprocessing
-%     X = [X_WPE, X_EEG];
-% end
+covariates = zscore(covariates);  % Z-score normalize covariates
+X_cov = [ones(size(covariates,1),1), covariates];  % Add intercept term to design matrix
+
+% Automatically detect dual modality based on feature count
+is_dual_modality = false;
+if size(X,2) == 105  % Assuming first 90 are WPE, last 15 are EEG
+    X_WPE = X(:,1:90);
+    X_EEG = X(:,91:end);
+    is_dual_modality = true;
+elseif size(X,2) == 90  % Only WPE features
+    X_WPE = X;
+    X_EEG = [];
+elseif size(X,2) == 15  % Only EEG features
+    X_WPE = [];
+    X_EEG = X;
+else
+    % Unknown structure – apply covariate regression to the whole matrix
+    warning('Unknown feature dimension structure, performing global covariate regression.');
+    for i = 1:size(X,2)
+        b = X_cov \ X(:,i);  % Regress out covariates
+        X(:,i) = X(:,i) - X_cov * b;
+    end
+    X = zscore(X);  % Normalize after regression
+end
+
+% Perform separate covariate regression for each modality if present
+if is_dual_modality || ~isempty(X_WPE) || ~isempty(X_EEG)
+    if ~isempty(X_WPE)
+        for i = 1:size(X_WPE,2)
+            b = X_cov \ X_WPE(:,i);
+            X_WPE(:,i) = X_WPE(:,i) - X_cov * b;
+        end
+        X_WPE = zscore(X_WPE);
+    end
+
+    if ~isempty(X_EEG)
+        for i = 1:size(X_EEG,2)
+            b = X_cov \ X_EEG(:,i);
+            X_EEG(:,i) = X_EEG(:,i) - X_cov * b;
+        end
+        X_EEG = zscore(X_EEG);
+    end
+
+    % Concatenate the two modalities after preprocessing
+    X = [X_WPE, X_EEG];
+end
 %% === Step 2: Nested CV + SVR model training ===
 % Outer CV to estimate generalization performance
 outerCV = cvpartition(nSamples, 'KFold', nFolds_outer);
